@@ -19,7 +19,7 @@
     "react-markdown": "10.1.0",
     "react-server-dom-webpack": "19.3.0",
     "remark-gfm": "4.0.1",
-    "vinext": "1.0.1"
+    "vinext": "1.1.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.63.0",
