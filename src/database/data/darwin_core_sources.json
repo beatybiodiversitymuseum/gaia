@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "archive_sha256": "3ec96fc600e2b1698456fc020662053067e3d0c6ca15bf9d92f84a1b1d3769b1",
+      "commit": "484a1b88c2994efcdf7dbfa8ce91d6b7d520307f",
+      "repository": "tdwg/dwc"
+    },
+    {
+      "archive_sha256": "fabd9a2bafd247487f4184954a627cccbe4fd7d30abc659d25692b833fbab11d",
+      "commit": "c7ce841ab92dc29107596fc859734789e1ba9607",
+      "repository": "tdwg/rs.tdwg.org"
+    }
+  ]
+}

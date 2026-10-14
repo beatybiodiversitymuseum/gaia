@@ -1,0 +1,38 @@
+{
+  "query plan structure": {
+    "scope": {
+      "collection": "<collection>",
+      "dataset": "<dataset>"
+    },
+    "query": {
+      "filters": {},
+      "column_mode": "default",
+      "return_columns": []
+    },
+    "result": {
+      "distinct_by": [],
+      "order_by": [],
+      "limit": 0
+    }
+  },
+  "statistics plan structure": {
+    "scope": {
+      "collection": "<collection>",
+      "dataset": "<dataset>"
+    },
+    "query": {
+      "filters": {},
+      "group_by": [],
+      "metrics": [
+        {
+          "operation": "count",
+          "alias": "record_count"
+        }
+      ]
+    },
+    "result": {
+      "order_by": [],
+      "limit": null
+    }
+  }
+}
