@@ -315,13 +315,19 @@ def test_registers_strict_tools_in_workflow_order(
         assert purpose["minLength"] == 1
         assert purpose["maxLength"] == 300
         assert "purpose" in definition.parameters["required"]
+        interpretation = definition.parameters["properties"]["interpretation"]
+        assert interpretation["type"] == "string"
+        assert interpretation["minLength"] == 1
+        assert interpretation["maxLength"] == 300
+        assert "interpretation" in definition.parameters["required"]
     schema_parameters = definitions["retrieve_schema"].parameters
-    assert schema_parameters["required"] == ["purpose"]
+    assert schema_parameters["required"] == ["purpose", "interpretation"]
     assert schema_parameters["additionalProperties"] is False
     assert set(schema_parameters["properties"]) == {
         "datasets",
         "collections",
         "purpose",
+        "interpretation",
     }
     query_parameters = definitions["query_occurrences"].parameters
     assert query_parameters["required"] == [
@@ -329,6 +335,7 @@ def test_registers_strict_tools_in_workflow_order(
         "query",
         "result",
         "purpose",
+        "interpretation",
     ]
     assert query_parameters["additionalProperties"] is False
     scope_property = query_parameters["properties"]["scope"]
@@ -385,7 +392,7 @@ def test_registers_strict_tools_in_workflow_order(
 
     file_parameters = definitions["generate_excel"].parameters
     assert file_parameters["required"] == [
-        "queries", "limit", "limit_scope", "layout", "purpose",
+        "queries", "limit", "limit_scope", "layout", "purpose", "interpretation",
     ]
     assert set(file_parameters["properties"]) == set(file_parameters["required"]) | {"filename"}
     assert file_parameters["properties"]["filename"]["type"] == "string"
@@ -788,6 +795,21 @@ def test_schema_tool_accepts_multiple_selector_categories_and_values(
     ] == ["algae", "bryophytes", "fungi", "lichen", "vascular_plants"]
 
 
+def test_schema_tool_defaults_to_all_collections(
+    toolset: GaiaToolset,
+) -> None:
+    schema_handler = _handler(toolset, "retrieve_schema")
+    default_result = asyncio.run(schema_handler({}))
+    explicit_result = asyncio.run(
+        schema_handler({"collections": list(toolset.scope_registry)})
+    )
+
+    assert default_result == explicit_result
+    assert [entry["collection"] for entry in default_result["collections"]] == list(
+        toolset.scope_registry
+    )
+
+
 def test_schema_tool_rejects_unknown_or_unbounded_arguments(
     toolset: GaiaToolset,
 ) -> None:
@@ -797,8 +819,8 @@ def test_schema_tool_rejects_unknown_or_unbounded_arguments(
         asyncio.run(schema_handler({"datasets": ["birds"], "extra": True}))
     with pytest.raises(ToolExecutionError, match="Unknown argument"):
         asyncio.run(schema_handler({"chunk_structure": ["identification"]}))
-    with pytest.raises(ToolExecutionError, match="At least one"):
-        asyncio.run(schema_handler({}))
+    with pytest.raises(ToolExecutionError, match="non-empty array"):
+        asyncio.run(schema_handler({"datasets": []}))
     with pytest.raises(ToolExecutionError, match="unknown datasets"):
         asyncio.run(schema_handler({"datasets": ["dragons"]}))
 

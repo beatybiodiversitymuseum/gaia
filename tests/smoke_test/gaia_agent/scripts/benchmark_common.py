@@ -1,13 +1,17 @@
 """Shared measurements for the Gaia and MTP benchmark sections."""
 
+import hashlib
 import json
 import re
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from itertools import count
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 GAIA_URL = "http://127.0.0.1:8765"
 VLLM_URL = "http://127.0.0.1:8000"
+MODEL = "default_model"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
 LOG_ROOT = REPOSITORY_ROOT / "logs" / "smoke_test" / "gaia_agent"
 REPORT_ROOT = REPOSITORY_ROOT / "reports" / "smoke_test"
@@ -16,6 +20,37 @@ CONTEXT_CACHE = "gaia/context_cache"
 CONVERSATION = "gaia/growing_conversation"
 CONVERSATION_SETUP = "gaia/conversation_setup"
 INTERFERENCE = "gaia/prefill_interference"
+
+
+@dataclass(frozen=True)
+class BenchmarkConfig:
+    """Explicit endpoints and served-model identity for one campaign."""
+
+    gaia_url: str = GAIA_URL
+    engine_url: str = VLLM_URL
+    model: str = MODEL
+
+    def snapshot(self) -> dict[str, str]:
+        return asdict(self)
+
+
+def sanitized_url(value: str) -> str:
+    """Keep endpoint routing evidence without persisting credentials or queries."""
+    parsed = urlsplit(value)
+    hostname = parsed.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def configuration_identity(config: BenchmarkConfig) -> dict:
+    snapshot = {"gaia_url": sanitized_url(config.gaia_url),
+                "engine_url": sanitized_url(config.engine_url), "requested_model_id": config.model}
+    encoded = json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+    return {"snapshot": snapshot, "sha256": hashlib.sha256(encoded).hexdigest()}
 
 
 METRIC_NAMES = {

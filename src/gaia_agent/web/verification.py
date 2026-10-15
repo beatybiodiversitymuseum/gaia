@@ -51,6 +51,7 @@ def project_verification_steps(
             "sequence": sequence,
             "capability": result.call.name,
             "purpose": result.call.purpose,
+            **({"interpretation": result.call.interpretation} if result.call.interpretation else {}),
             "arguments": dict(result.call.arguments),
             "status": "completed" if result.ok else "failed",
             "evidence": _bounded_evidence(result),

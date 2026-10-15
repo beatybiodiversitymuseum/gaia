@@ -13,7 +13,7 @@ from pathlib import Path
 import httpx
 
 from tests.smoke_test.gaia_agent.scripts.benchmark_common import (
-    VLLM_URL,
+    BenchmarkConfig,
     metric_deltas,
     parse_metrics,
     percentile,
@@ -22,7 +22,7 @@ from tests.smoke_test.gaia_agent.scripts.benchmark_common import (
 )
 
 
-MODEL = "default_model"
+MODEL = BenchmarkConfig().model
 LONG_INPUT_TOKENS = 130_048
 WINDOW = 131_072
 UNIT = (
@@ -46,10 +46,12 @@ def _benchmark_messages(
 
 
 class EngineExperiment:
-    def __init__(self, client: httpx.AsyncClient, directory: Path, identity: str) -> None:
+    def __init__(self, client: httpx.AsyncClient, directory: Path, identity: str,
+                 config: BenchmarkConfig | None = None) -> None:
         self.client = client
         self.directory = directory
         self.identity = identity
+        self.config = config or BenchmarkConfig()
         self.requests_dir = directory / "requests"
         self.metrics_dir = directory / "metrics"
         self.environment_dir = directory / "environment"
@@ -67,7 +69,7 @@ class EngineExperiment:
         return {"utc": utc_now(), "elapsed_seconds": time.perf_counter() - self.start}
 
     async def metrics(self, label: str) -> dict:
-        response = await self.client.get(VLLM_URL + "/metrics", timeout=10.0)
+        response = await self.client.get(self.config.engine_url + "/metrics", timeout=10.0)
         response.raise_for_status()
         (self.metrics_dir / f"{label}.prom").write_text(response.text)
         return parse_metrics(response.text)
@@ -78,7 +80,7 @@ class EngineExperiment:
             while not self.stop_monitor.is_set():
                 sample = self.stamp()
                 try:
-                    response = await self.client.get(VLLM_URL + "/metrics", timeout=10.0)
+                    response = await self.client.get(self.config.engine_url + "/metrics", timeout=10.0)
                     response.raise_for_status()
                     sample.update(self.stamp(), metrics=parse_metrics(response.text))
                     self.samples.append(sample)
@@ -94,7 +96,7 @@ class EngineExperiment:
 
     async def tokenize(self, messages: list[dict]) -> dict:
         response = await self.client.post(
-            VLLM_URL + "/tokenize", json={"model": MODEL, "messages": messages}, timeout=120.0,
+            self.config.engine_url + "/tokenize", json={"model": self.config.model, "messages": messages}, timeout=120.0,
         )
         response.raise_for_status()
         return response.json()
@@ -123,7 +125,7 @@ class EngineExperiment:
         else:
             raise RuntimeError(f"Could not size {identity} near {target_tokens} tokens: {count}")
         payload = {
-            "model": MODEL, "messages": current_messages, "stream": True,
+            "model": self.config.model, "messages": current_messages, "stream": True,
             "stream_options": {"include_usage": True},
             "max_completion_tokens": output_tokens, "ignore_eos": True,
         }
@@ -155,7 +157,7 @@ class EngineExperiment:
         write_json(request_dir / "request.json", payload)
         try:
             with (request_dir / "events.jsonl").open("w") as events:
-                async with self.client.stream("POST", VLLM_URL + "/v1/chat/completions", json=payload) as response:
+                async with self.client.stream("POST", self.config.engine_url + "/v1/chat/completions", json=payload) as response:
                     result["http_status"] = response.status_code
                     if response.status_code != 200:
                         result["error"] = (await response.aread()).decode(errors="replace")
@@ -405,14 +407,16 @@ async def mixed_workload(experiment: EngineExperiment) -> None:
     })
 
 
-async def run_phase(directory: Path, identity: str, workload, *, phase_name: str) -> dict:
+async def run_phase(directory: Path, identity: str, workload, *, phase_name: str,
+                    config: BenchmarkConfig | None = None) -> dict:
+    config = config or BenchmarkConfig()
     directory.mkdir(parents=True, exist_ok=False)
     timeout = httpx.Timeout(connect=10.0, read=None, write=120.0, pool=10.0)
     async with httpx.AsyncClient(timeout=timeout, limits=httpx.Limits(max_connections=32), trust_env=False) as client:
-        experiment = EngineExperiment(client, directory, identity)
+        experiment = EngineExperiment(client, directory, identity, config)
         write_json(directory / "manifest.json", {
             "phase": phase_name, "identity": identity, "started_at": experiment.started_at,
-            "start_monotonic_seconds": experiment.start, "model": MODEL,
+            "start_monotonic_seconds": experiment.start, "model": config.model,
             "classification": "Fixed-budget generation timing; answer completeness is recorded separately",
             "sampling": "Exact sampling, streaming and output settings are saved in each request payload",
             "first_output_definition": "First nonempty reasoning/content chunk observed by client, not exact token TTFT",
@@ -422,10 +426,10 @@ async def run_phase(directory: Path, identity: str, workload, *, phase_name: str
         before, after, monitor = {}, {}, None
         status, error_message = "failed", None
         try:
-            response = await client.get(VLLM_URL + "/v1/models", timeout=10.0)
+            response = await client.get(config.engine_url + "/v1/models", timeout=10.0)
             response.raise_for_status()
             write_json(experiment.environment_dir / "models.json", response.json())
-            model = next(item for item in response.json()["data"] if item["id"] == MODEL)
+            model = next(item for item in response.json()["data"] if item["id"] == config.model)
             if model["max_model_len"] != WINDOW:
                 raise RuntimeError(f"Unexpected context window: {model['max_model_len']}")
             before = await experiment.metrics("before")

@@ -8,7 +8,7 @@ import re
 from functools import partial
 from pathlib import Path
 
-from tests.smoke_test.gaia_agent.scripts.benchmark_common import VLLM_URL, write_json
+from tests.smoke_test.gaia_agent.scripts.benchmark_common import BenchmarkConfig, write_json
 from tests.smoke_test.gaia_agent.scripts.engine_experiments import (
     MODEL,
     EngineExperiment,
@@ -41,6 +41,32 @@ QUESTIONS = [
     'Design an inference workload scheduler for an assistant querying this collection: at most ten running requests and five waiting, token streaming, cancellations, and reusable prompt prefixes. Analyze admission races, fairness, queue accounting, cancellation during generation, disconnects, retries, and cache isolation. Explain how to measure per-request decode speed separately from prefill and end-to-end throughput, with concrete examples and failure cases.'
 ]
 
+SENSITIVE_NAME = re.compile(r"(?:token|secret|password|credential|api[_-]?key|auth)", re.IGNORECASE)
+
+
+def redact_configuration_evidence(value, key: str = ""):
+    """Remove common secret-bearing fields while preserving configuration shape."""
+    if SENSITIVE_NAME.search(key):
+        return "[REDACTED]"
+    if isinstance(value, dict):
+        return {name: redact_configuration_evidence(item, name) for name, item in value.items()}
+    if isinstance(value, list):
+        redacted = []
+        redact_next = False
+        for item in value:
+            if redact_next:
+                redacted.append("[REDACTED]")
+                redact_next = False
+            elif isinstance(item, str) and "=" in item and SENSITIVE_NAME.search(item.split("=", 1)[0]):
+                redacted.append(item.split("=", 1)[0] + "=[REDACTED]")
+            elif key == "Cmd" and isinstance(item, str) and SENSITIVE_NAME.search(item):
+                redacted.append(item)
+                redact_next = item.startswith("--")
+            else:
+                redacted.append(redact_configuration_evidence(item, key))
+        return redacted
+    return value
+
 
 def command_option(command: list[str], name: str) -> str | None:
     values = []
@@ -56,7 +82,7 @@ def command_option(command: list[str], name: str) -> str | None:
     return values[0] if values else None
 
 
-def configuration(evidence_path: Path, mode: str) -> tuple[dict, dict]:
+def configuration(evidence_path: Path, mode: str, expected_model: str = MODEL) -> tuple[dict, dict]:
     raw = evidence_path.read_bytes()
     evidence = json.loads(raw)
     if isinstance(evidence, list):
@@ -86,7 +112,10 @@ def configuration(evidence_path: Path, mode: str) -> tuple[dict, dict]:
             skip_value = True
         elif not item.startswith(("--speculative-config=", "--per-request-spec-decode-metrics=")):
             target_command.append(item)
-    target = {"image": evidence["Image"], "command": target_command, "environment": sorted(environment)}
+    safe_environment = redact_configuration_evidence(sorted(environment))
+    target = {"image": evidence["Image"],
+              "command": redact_configuration_evidence(target_command, "Cmd"),
+              "environment": safe_environment}
     labels = config.get("Labels") or {}
     image_version = (labels.get("ai.vllm.image.tag") or labels.get("org.opencontainers.image.version")
                      or config.get("Image", ""))
@@ -95,9 +124,9 @@ def configuration(evidence_path: Path, mode: str) -> tuple[dict, dict]:
         raise ValueError("Docker image evidence lacks a version tag; retain its vLLM image labels")
     context = command_option(command, "--max-model-len")
     model = command_option(command, "--served-model-name")
-    if context is None or model != MODEL:
-        raise ValueError(f"Evidence must specify --max-model-len and --served-model-name {MODEL}")
-    return evidence, {
+    if context is None or model != expected_model:
+        raise ValueError(f"Evidence must specify --max-model-len and --served-model-name {expected_model}")
+    return redact_configuration_evidence(evidence), {
         "mode": mode, "k": k, "evidence_path": str(evidence_path.resolve()),
         "evidence_sha256": hashlib.sha256(raw).hexdigest(),
         "container_id": evidence["Id"], "container_started_at": evidence["State"]["StartedAt"],
@@ -121,7 +150,7 @@ async def verify_configuration(experiment: EngineExperiment, evidence: dict, ver
         if other_spec and spec and ({key: value for key, value in other_spec.items() if key != "num_speculative_tokens"}
                                    != {key: value for key, value in spec.items() if key != "num_speculative_tokens"}):
             errors.append(f"MTP draft settings differ from {path.parent.parent.name}")
-    response = await experiment.client.get(VLLM_URL + "/version", timeout=10)
+    response = await experiment.client.get(experiment.config.engine_url + "/version", timeout=10)
     response.raise_for_status()
     version = response.json()
     write_json(experiment.environment_dir / "version.json", version)
@@ -148,12 +177,12 @@ async def prepare_requests(experiment: EngineExperiment, level: int, *, warmup: 
         messages = [{"role": "user", "content": identity + "\n" + CONTEXT + "\nTask: "
                      + QUESTIONS[index % len(QUESTIONS)] + f" Use case identifier B{index:02d} in your answer."}]
         template = {"enable_thinking": True, "preserve_thinking": True}
-        response = await experiment.client.post(VLLM_URL + "/tokenize", json={
-            "model": MODEL, "messages": messages, "chat_template_kwargs": template,
+        response = await experiment.client.post(experiment.config.engine_url + "/tokenize", json={
+            "model": experiment.config.model, "messages": messages, "chat_template_kwargs": template,
         }, timeout=120)
         response.raise_for_status()
         tokenized = response.json()
-        payload = {"model": MODEL, "messages": messages, "max_completion_tokens": output_tokens,
+        payload = {"model": experiment.config.model, "messages": messages, "max_completion_tokens": output_tokens,
                    "temperature": 1.0, "top_p": .95, "top_k": 20, "seed": 5100 + index,
                    "chat_template_kwargs": template, "stream": True,
                    "stream_options": {"include_usage": True}, "ignore_eos": True}
@@ -222,9 +251,12 @@ async def _measure_mode(
                 verify_measurements(experiment, rows, mode)
 
 
-async def run_mode(run_dir: Path, identity: str, mode: str, evidence_path: Path) -> dict:
-    evidence, verification = configuration(evidence_path, mode)
+async def run_mode(run_dir: Path, identity: str, mode: str, evidence_path: Path,
+                   config: BenchmarkConfig | None = None) -> dict:
+    config = config or BenchmarkConfig()
+    evidence, verification = configuration(evidence_path, mode, config.model)
 
     workload = partial(_measure_mode, evidence, verification, mode, identity)
 
-    return await run_phase(run_dir / "mtp" / mode, identity, workload, phase_name=f"mtp/{mode}")
+    return await run_phase(run_dir / "mtp" / mode, identity, workload,
+                           phase_name=f"mtp/{mode}", config=config)

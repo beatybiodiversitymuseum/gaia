@@ -291,10 +291,7 @@ class GaiaToolset:
         datasets = _optional_selector_values(arguments, "datasets")
         collections = _optional_selector_values(arguments, "collections")
         if not (datasets or collections):
-            raise ToolExecutionError(
-                "invalid_arguments",
-                "At least one schema selector is required.",
-            )
+            collections = tuple(self.scope_registry)
         try:
             dataset_registry = {
                 key: (collection, dataset)

@@ -336,6 +336,10 @@ class _ChatStream:
             {
                 "id": f"activity-{self.emitted_activities + index}",
                 **summarize_gaia_tool_result(result),
+                **(
+                    {"interpretation": result.call.interpretation}
+                    if result.call.interpretation else {}
+                ),
             }
             for index, result in enumerate(event.tool_results[:remaining], start=1)
         ]

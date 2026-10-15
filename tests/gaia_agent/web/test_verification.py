@@ -22,6 +22,7 @@ def test_projects_exact_arguments_and_bounded_record_evidence() -> None:
             "query_occurrences",
             arguments,
             purpose="Retrieve records that answer the user's species request.",
+            interpretation="Find bird records whose scientific name matches the requested species.",
         ),
         True,
         {"records": records, "metadata": {"database_records_returned": len(records)}},
@@ -33,6 +34,9 @@ def test_projects_exact_arguments_and_bounded_record_evidence() -> None:
     assert steps[0]["capability"] == "query_occurrences"
     assert steps[0]["purpose"] == (
         "Retrieve records that answer the user's species request."
+    )
+    assert steps[0]["interpretation"] == (
+        "Find bird records whose scientific name matches the requested species."
     )
     assert steps[0]["arguments"] == arguments
     assert steps[0]["status"] == "completed"

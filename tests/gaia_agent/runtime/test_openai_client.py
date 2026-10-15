@@ -68,7 +68,7 @@ async def test_serializes_transcript_and_parses_parallel_tool_calls() -> None:
                                 "type": "function",
                                 "function": {
                                     "name": "lookup",
-                                    "arguments": '{"purpose":"Check the first value.","value":2}',
+                                    "arguments": '{"purpose":"Check the first value.","interpretation":"Use the first requested value.","value":2}',
                                 },
                             },
                             {
@@ -76,7 +76,7 @@ async def test_serializes_transcript_and_parses_parallel_tool_calls() -> None:
                                 "type": "function",
                                 "function": {
                                     "name": "lookup",
-                                    "arguments": '{"value":3,"purpose":"Check the second value."}',
+                                    "arguments": '{"value":3,"purpose":"Check the second value.","interpretation":"Use the second requested value."}',
                                 },
                             },
                         ],
@@ -143,12 +143,18 @@ async def test_serializes_transcript_and_parses_parallel_tool_calls() -> None:
         "Check the first value.",
         "Check the second value.",
     ]
+    assert [call.interpretation for call in turn.tool_calls] == [
+        "Use the first requested value.",
+        "Use the second requested value.",
+    ]
+    assert turn.tool_calls[0].arguments == {"value": 2}
 
 
 async def test_replays_provider_call_and_nested_argument_order() -> None:
     arguments = (
         {
             "purpose": "Create the requested occurrence workbook.",
+            "interpretation": "Export three matching Birds records in one workbook.",
             "queries": [{
                 "scope": {"dataset": "Birds"},
                 "query": {
@@ -166,6 +172,7 @@ async def test_replays_provider_call_and_nested_argument_order() -> None:
         {
             "collections": ["Herbarium"],
             "purpose": "Check field availability for both scopes.",
+            "interpretation": "Inspect the Herbarium collection and birds dataset schemas.",
             "datasets": ["birds"],
         },
     )
@@ -232,6 +239,29 @@ async def test_rejects_tool_call_without_public_purpose() -> None:
     }
 
     with pytest.raises(OpenAIClientError, match="purpose must be a non-empty string"):
+        await _complete_response(document)
+
+
+async def test_rejects_tool_call_without_public_interpretation() -> None:
+    document = {
+        "choices": [{
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": '{"purpose":"Check the value.","value":2}',
+                    },
+                }],
+            },
+        }],
+    }
+
+    with pytest.raises(OpenAIClientError, match="interpretation must be a non-empty string"):
         await _complete_response(document)
 
 
@@ -696,7 +726,7 @@ async def test_preserves_explicit_reasoning_and_round_trips_supported_alias(
                                 "type": "function",
                                 "function": {
                                     "name": "lookup",
-                                    "arguments": '{"purpose":"Check the requested value.","value":2}',
+                                    "arguments": '{"purpose":"Check the requested value.","interpretation":"Use the requested value.","value":2}',
                                 },
                             }
                         ],

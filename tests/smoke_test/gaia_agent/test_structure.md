@@ -111,6 +111,22 @@ uses another local trace directory, supply `--trace-root /absolute/service/trace
 This directory is an input: request traces are copied into the campaign beside
 their results.
 
+The service and model target can be changed without editing the suite:
+
+```bash
+.venv/bin/python -m tests.smoke_test.gaia_agent.scripts.run_suite gaia \
+  --gaia-url http://127.0.0.1:8765 \
+  --engine-url http://127.0.0.1:8000 \
+  --model default_model
+```
+
+Use the same three values when resuming. The suite rejects a resume whose target
+configuration differs. `suite_manifest.json` stores credential-free endpoint
+forms, the requested model, deterministic configuration/workload hashes, and the
+resolved `/v1/models` inventory entry and context window. The full inventory is
+saved as `model_inventory.json`. A model revision is recorded only when the
+endpoint reports one; otherwise its status is explicitly `missing_from_endpoint`.
+
 `mtp` guides the operator through **off, k1, k2 and k3**. Before each mode, switch
 the engine configuration in the GX10 app terminal and save a fresh `docker inspect`
 JSON locally; enter that file's path at the runner's prompt. `all` completes Gaia,
@@ -156,6 +172,7 @@ reports/smoke_test/RUN_FOLDER/
 
 logs/smoke_test/gaia_agent/RUN_FOLDER/
   suite_manifest.json
+  model_inventory.json
   suite_summary.json
   runner.log
   gaia/

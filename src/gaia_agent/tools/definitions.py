@@ -26,14 +26,19 @@ PUBLIC_PURPOSE_DESCRIPTION = (
     "Concise public explanation of why this call is needed and what evidence "
     "it is expected to establish. Do not include private reasoning or instructions."
 )
+PUBLIC_INTERPRETATION_DESCRIPTION = (
+    "Concise public statement of how the user's request is interpreted for this "
+    "call: the selected scope, filters, and operation when applicable. Describe "
+    "only choices reflected in the arguments; do not include private reasoning."
+)
 
 # ---------------------------------------------------------------------------
 # Model-visible JSON Schemas
 # ---------------------------------------------------------------------------
 
 
-def _require_public_purpose(definition: ToolDefinition) -> ToolDefinition:
-    """Add the public call-purpose annotation to a tool's root object schema."""
+def _require_public_annotations(definition: ToolDefinition) -> ToolDefinition:
+    """Add public call annotations to a tool's root object schema."""
     parameters = deepcopy(definition.parameters)
     properties = parameters.get("properties")
     if not isinstance(properties, dict):
@@ -44,10 +49,17 @@ def _require_public_purpose(definition: ToolDefinition) -> ToolDefinition:
         "maxLength": 300,
         "description": PUBLIC_PURPOSE_DESCRIPTION,
     }
+    properties["interpretation"] = {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300,
+        "description": PUBLIC_INTERPRETATION_DESCRIPTION,
+    }
     required = parameters.setdefault("required", [])
     if not isinstance(required, list):
         raise ValueError(f"tool {definition.name!r} has invalid required fields")
     required.append("purpose")
+    required.append("interpretation")
     return ToolDefinition(
         name=definition.name,
         description=definition.description,
@@ -617,7 +629,8 @@ def build_tool_definitions(
         name="retrieve_schema",
         description=(
             "Return selected schema slices and occurrence and statistics plan "
-            "templates. Results include exact scope labels and physical-header "
+            "templates. With no selector, return all available collections. "
+            "Results include exact scope labels and physical-header "
             "availability mappings: 1 means at least one record contains a "
             "non-whitespace value in that field; 0 means every record is empty "
             "or whitespace-only in that field."
@@ -625,7 +638,7 @@ def build_tool_definitions(
         parameters=_build_schema_parameters(scope_registry),
         strict=True,
     )
-    return tuple(_require_public_purpose(definition) for definition in (
+    return tuple(_require_public_annotations(definition) for definition in (
         schema_definition,
         _DARWIN_CORE_SEARCH_DEFINITION,
         _DARWIN_CORE_GET_DEFINITION,

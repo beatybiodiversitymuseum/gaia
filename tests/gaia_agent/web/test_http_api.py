@@ -568,6 +568,7 @@ def test_http_chat_streams_public_progress_before_the_response(
                             "private-schema-call",
                             "retrieve_schema",
                             {"datasets": ["Birds"]},
+                            interpretation="Check the Birds dataset fields before searching records.",
                         ),
                         ok=True,
                         result={
@@ -658,6 +659,7 @@ def test_http_chat_streams_public_progress_before_the_response(
                 "status": "completed",
                 "label": "Reviewed catalogue fields",
                 "detail": "Checked the fields available for the requested records.",
+                "interpretation": "Check the Birds dataset fields before searching records.",
             },
             {
                 "id": "activity-2",
@@ -677,11 +679,12 @@ def test_http_chat_streams_public_progress_before_the_response(
     assert "PRIVATE" not in serialized_events
     assert "private-schema-call" not in serialized_events
     assert "private-query-call" not in serialized_events
+    progress_events = json.dumps(events[:-1])
     for private_field in (
         "retrieve_schema", "query_occurrences", "model_turn", "tool_calls",
         "tool_batch", "field mappings", "schema chunk", "activities_omitted",
     ):
-        assert private_field not in serialized_events
+        assert private_field not in progress_events
     assert events[-1]["type"] == "response"
     assert events[-1]["data"]["message"]["content"] == "Grounded answer."
 
@@ -808,7 +811,7 @@ def test_http_activity_start_exposes_only_public_phase(
 
     assert status == 200
     assert events[1] == {"type": "progress", "phase": phase}
-    assert all(name not in json.dumps(events) for name in tool_names)
+    assert all(name not in json.dumps(events[:-1]) for name in tool_names)
 
 
 def test_http_chat_flushes_progress_while_the_agent_is_still_running(

@@ -749,6 +749,16 @@
   line-height: 1.45;
 }
 
+.activity-summary .activity-interpretation {
+  margin-top: 4px;
+  color: #5a4d44;
+}
+
+.activity-summary .activity-interpretation strong {
+  display: inline;
+  font-weight: 600;
+}
+
 .activity-summary > .activity-empty {
   margin: 0;
 }
@@ -807,6 +817,37 @@
   margin: 12px 0 0;
   padding: 0;
   list-style: none;
+}
+
+.verification-replay-help {
+  margin: 10px 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.verification-replay {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 5px 8px;
+  border: 1px solid rgba(106, 77, 52, 0.3);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--museum-red-dark);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.76rem;
+}
+
+.verification-replay svg {
+  width: 14px;
+  height: 14px;
+}
+
+.verification-replay:focus-visible {
+  outline: 2px solid rgba(166, 75, 82, 0.42);
+  outline-offset: 2px;
 }
 
 .verification-disclosure > ol > li {

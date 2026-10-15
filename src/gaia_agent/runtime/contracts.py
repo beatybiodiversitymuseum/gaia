@@ -47,12 +47,13 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
-    """Store an invocation's public purpose and executable arguments."""
+    """Store an invocation's public annotations and executable arguments."""
 
     id: str
     name: str
     arguments: dict[str, object]
     purpose: str | None = None
+    interpretation: str | None = None
     emitted_arguments: dict[str, object] | None = field(
         default=None,
         repr=False,
@@ -76,6 +77,14 @@ class ToolCall:
         ):
             raise ValueError(
                 "tool call purpose must be a non-empty string of at most 300 characters"
+            )
+        if self.interpretation is not None and (
+            not isinstance(self.interpretation, str)
+            or not self.interpretation.strip()
+            or len(self.interpretation) > 300
+        ):
+            raise ValueError(
+                "tool call interpretation must be a non-empty string of at most 300 characters"
             )
         emitted_arguments = self.emitted_arguments
         if emitted_arguments is not None and not isinstance(emitted_arguments, dict):

@@ -234,6 +234,11 @@ function ActivityDisclosure({
                   <div>
                     <strong>{step.label}</strong>
                     <p>{step.detail}</p>
+                    {step.interpretation ? (
+                      <p className="activity-interpretation">
+                        <strong>Interpretation:</strong> {step.interpretation}
+                      </p>
+                    ) : null}
                   </div>
                 </li>
               ))}
@@ -295,10 +300,17 @@ function VerificationDisclosure({
   return (
     <details className="verification-disclosure">
       <summary>Verify this answer</summary>
+      <p className="verification-replay-help">
+        Copy a call and run it in a terminal from your Gaia repository, using the
+        same database configuration.
+      </p>
       <ol>
         {verification.map((step) => (
           <li key={step.sequence}>
             <h4>Tool call {step.sequence}</h4>
+            {step.status === 'completed' && step.capability !== 'generate_excel' ? (
+              <ReplayCommand step={step} />
+            ) : null}
             <section className="verification-tool">
               <strong>Tool</strong>
               <div>
@@ -306,6 +318,12 @@ function VerificationDisclosure({
                 <span data-status={step.status}>{step.status}</span>
               </div>
             </section>
+            {step.interpretation ? (
+              <section className="verification-purpose">
+                <strong>Interpretation</strong>
+                <p>{step.interpretation}</p>
+              </section>
+            ) : null}
             <section className="verification-purpose">
               <strong>Purpose</strong>
               <p>{step.purpose}</p>
@@ -320,6 +338,50 @@ function VerificationDisclosure({
         ))}
       </ol>
     </details>
+  );
+}
+
+function replay_command(step: GaiaVerificationStep): string {
+  const payload = JSON.stringify(
+    { capability: step.capability, arguments: step.arguments },
+    null,
+    2,
+  );
+  let delimiter = 'GAIA_REPLAY_JSON';
+  while (payload.split('\n').includes(delimiter)) {
+    delimiter += '_END';
+  }
+  return `.venv/bin/python -m src.gaia_agent.replay <<'${delimiter}'\n${payload}\n${delimiter}`;
+}
+
+function ReplayCommand({ step }: { step: GaiaVerificationStep }) {
+  const [copy_status, set_copy_status] = useState<'idle' | 'copied' | 'failed'>(
+    'idle',
+  );
+
+  async function copy_command() {
+    try {
+      await globalThis.navigator.clipboard.writeText(replay_command(step));
+      set_copy_status('copied');
+    } catch {
+      set_copy_status('failed');
+    }
+  }
+
+  return (
+    <button
+      className="verification-replay"
+      type="button"
+      onClick={() => void copy_command()}
+      title="Copy a command to rerun this call from the Gaia repository"
+    >
+      {copy_status === 'copied' ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+      {copy_status === 'copied'
+        ? 'Copied terminal command'
+        : copy_status === 'failed'
+          ? 'Copy failed'
+          : 'Copy terminal command'}
+    </button>
   );
 }
 

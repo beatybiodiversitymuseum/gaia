@@ -25,6 +25,8 @@ from tests.smoke_test.gaia_agent.scripts import (
     summarize_results,
 )
 
+CAPTURE_MODEL_IDENTITY = run_suite.capture_model_identity
+
 
 @pytest.fixture
 def suite(monkeypatch, tmp_path):
@@ -34,6 +36,15 @@ def suite(monkeypatch, tmp_path):
         runner=run_suite, reports=summarize_results,
     )
     monkeypatch.setattr(modules.common, "REPORT_ROOT", tmp_path / "reports/smoke_test")
+    async def capture(run_dir, manifest, config):
+        manifest["model_identity"] = {
+            "requested_model_id": config.model,
+            "resolved_inventory_entry": {"id": config.model, "max_model_len": 131072},
+            "context_tokens": 131072, "revision": None,
+            "revision_status": "missing_from_endpoint",
+        }
+        save(run_dir / "suite_manifest.json", manifest)
+    monkeypatch.setattr(modules.runner, "capture_model_identity", capture)
     return modules
 
 
@@ -90,7 +101,7 @@ async def _chat_storage_workload(gaia, directory, traces, client, started, resul
     return {}
 
 
-async def _interrupted_phase(visited, evidence, failure_type, directory, workload):
+async def _interrupted_phase(visited, evidence, failure_type, directory, workload, config=None):
     level = int(directory.name.removeprefix("users_"))
     visited.append(level)
     assert level in (1, 2)
@@ -119,7 +130,7 @@ class _GaiaStages:
         self.seed = None
         self.pool = None
 
-    async def ladder(self, run, identity, traces):
+    async def ladder(self, run, identity, traces, config=None):
         self.order.append(self.suite.common.CONCURRENCY)
         summaries = [phase_record(run / self.suite.common.CONCURRENCY / f"users_{users:02d}", requests=users)
                      for users in (1, 2, 3, 5, 7, 10)]
@@ -127,13 +138,13 @@ class _GaiaStages:
         self.seed = {"conversation_id": "retained-ladder-chat", "username": identity}
         return self.seed
 
-    async def seed_conversation(self, run, identity, traces):
+    async def seed_conversation(self, run, identity, traces, config=None):
         self.order.append(self.suite.common.CONVERSATION_SETUP)
         phase_record(run / self.suite.common.CONVERSATION_SETUP)
         self.seed = {"conversation_id": "standalone-seed-chat", "username": identity}
         return self.seed
 
-    async def history(self, run, seed, traces):
+    async def history(self, run, seed, traces, config=None):
         self.order.append(self.suite.common.CONVERSATION)
         assert seed is self.seed
         return phase_record(run / self.suite.common.CONVERSATION, requests=4, growth=2)
@@ -153,7 +164,7 @@ class _GaiaStages:
         assert initial_directory == source.parent.parent
         assert source.read_bytes() == original
 
-    async def engine_phase(self, directory, identity, workload, *, phase_name):
+    async def engine_phase(self, directory, identity, workload, *, phase_name, config=None):
         await workload(SimpleNamespace(directory=directory, identity=identity))
         requests = 10 if phase_name == self.suite.runner.RETAINED_CONTEXT else 22
         comparisons = [{"group": "cold_10_users", "status": "completed"}] if phase_name == self.suite.runner.INITIAL_CONTEXT else []
@@ -190,7 +201,7 @@ class _SuiteHandoffs:
         self.prompts = []
         self.answers = iter(())
 
-    async def gaia(self, run, trace_root, identity, target):
+    async def gaia(self, run, trace_root, identity, target, config=None):
         assert target == "all"
         assert trace_root == self.suite.common.REPOSITORY_ROOT / "logs"
         self.seen.append(("gaia", identity))
@@ -198,7 +209,7 @@ class _SuiteHandoffs:
         save(run / "gaia/summary.json", {"status": "completed", "requests": 1, "successful": 1})
         print("Gaia storage stage complete", flush=True)
 
-    async def mtp(self, run, identity, mode, path):
+    async def mtp(self, run, identity, mode, path, config=None):
         assert path == self.evidence[mode]
         self.seen.append((mode, identity))
         phase_record(run / "mtp" / mode, mtp=True)
@@ -212,7 +223,7 @@ class _SuiteHandoffs:
             raise EOFError from None
 
 
-async def _record_mtp_run(calls, run, identity, mode, evidence):
+async def _record_mtp_run(calls, run, identity, mode, evidence, config=None):
     calls.append((identity, mode, evidence))
     phase_record(run / "mtp" / mode, mtp=True)
 
@@ -253,10 +264,72 @@ def test_run_paths_are_anchored_and_new_names_do_not_collide(suite, monkeypatch,
         suite.common.existing_run_directory("../outside")
 
 
+def test_campaign_configuration_is_sanitized_hashed_and_fixed_on_resume(suite, tmp_path):
+    run = tmp_path / "campaign"
+    config = suite.common.BenchmarkConfig(
+        "https://gaia-user:gaia-secret@example.test:9443/root/?token=hidden",
+        "https://engine-user:engine-secret@models.test/vllm/?api_key=hidden",
+        "cheaper-model",
+    )
+    manifest = suite.runner.campaign_manifest(run, None, None, "gaia", config)
+    encoded = json.dumps(manifest)
+    assert "gaia-secret" not in encoded and "engine-secret" not in encoded and "hidden" not in encoded
+    assert manifest["configuration"]["snapshot"] == {
+        "gaia_url": "https://example.test:9443/root",
+        "engine_url": "https://models.test/vllm",
+        "requested_model_id": "cheaper-model",
+    }
+    assert re.fullmatch(r"[0-9a-f]{64}", manifest["configuration"]["sha256"])
+    assert re.fullmatch(r"[0-9a-f]{64}", manifest["workload_configuration"]["sha256"])
+    with pytest.raises(ValueError, match="Resume configuration differs"):
+        suite.runner.campaign_manifest(run, None, None, "gaia", suite.common.BenchmarkConfig())
+
+
+def test_model_inventory_identity_records_context_and_missing_revision(monkeypatch, tmp_path):
+    mock_clients(monkeypatch, endpoint)
+    run = tmp_path / "campaign"
+    config = benchmark_common.BenchmarkConfig()
+    manifest = run_suite.campaign_manifest(run, None, None, "gaia", config)
+    asyncio.run(CAPTURE_MODEL_IDENTITY(run, manifest, config))
+    saved = read(run / "suite_manifest.json")["model_identity"]
+    assert saved["requested_model_id"] == "default_model"
+    assert saved["resolved_inventory_entry"]["max_model_len"] == 131072
+    assert saved["context_tokens"] == 131072
+    assert saved["revision"] is None
+    assert saved["revision_status"] == "missing_from_endpoint"
+    assert re.fullmatch(r"[0-9a-f]{64}", saved["inventory_sha256"])
+    assert read(run / "model_inventory.json")["data"][0]["id"] == "default_model"
+
+
+def test_model_inventory_identity_rejects_resolved_model_drift(monkeypatch, tmp_path):
+    mock_clients(monkeypatch, endpoint)
+    run = tmp_path / "campaign"
+    config = benchmark_common.BenchmarkConfig()
+    manifest = run_suite.campaign_manifest(run, None, None, "gaia", config)
+    manifest["model_identity"] = {
+        "requested_model_id": "default_model",
+        "resolved_inventory_entry": {"id": "default_model", "max_model_len": 65536},
+    }
+    with pytest.raises(ValueError, match="Live model inventory differs"):
+        asyncio.run(CAPTURE_MODEL_IDENTITY(run, manifest, config))
+
+
+def test_container_evidence_redaction_covers_environment_and_command_secrets(suite):
+    value = {"Config": {"Env": ["SAFE=yes", "API_TOKEN=private"],
+                        "Cmd": ["serve", "--api-key", "private", "--port=8000"]},
+             "RegistryAuth": "private"}
+    redacted = suite.mtp.redact_configuration_evidence(value)
+    assert redacted["Config"]["Env"] == ["SAFE=yes", "API_TOKEN=[REDACTED]"]
+    assert redacted["Config"]["Cmd"] == ["serve", "--api-key", "[REDACTED]", "--port=8000"]
+    assert redacted["RegistryAuth"] == "[REDACTED]"
+    assert "private" not in json.dumps(redacted)
+
+
 @pytest.mark.parametrize("target", ["gaia", "mtp"])
 def test_completed_section_is_reused_without_overwriting_records(suite, monkeypatch, tmp_path, target):
     run = tmp_path / "campaign"
     manifest = suite.runner.campaign_manifest(run, None, None, target)
+    asyncio.run(suite.runner.capture_model_identity(run, manifest, suite.common.BenchmarkConfig()))
     directory = run / "mtp/off" if target == "mtp" else run / "gaia"
     directory.mkdir(parents=True)
     if target == "gaia":

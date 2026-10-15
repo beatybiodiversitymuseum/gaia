@@ -18,8 +18,7 @@ from tests.smoke_test.gaia_agent.scripts.benchmark_common import (
     CONCURRENCY,
     CONVERSATION,
     CONVERSATION_SETUP,
-    GAIA_URL,
-    VLLM_URL,
+    BenchmarkConfig,
     context_compaction_events,
     active_context_tokens,
     metric_deltas,
@@ -72,7 +71,8 @@ async def chat(client: httpx.AsyncClient, output_dir: Path, phase_start: float,
                request_id: str, username: str, prompt: str,
                conversation_id: str | None = None, *, trace_root: Path | None = None,
                classification: str = "ordinary_query", results: list | None = None,
-               expected_interaction: int = 1) -> dict:
+               expected_interaction: int = 1, config: BenchmarkConfig | None = None) -> dict:
+    config = config or BenchmarkConfig()
     request_dir = output_dir / "requests" / request_id
     request_dir.mkdir(parents=True)
     start = time.perf_counter()
@@ -90,7 +90,7 @@ async def chat(client: httpx.AsyncClient, output_dir: Path, phase_start: float,
     save(request_dir / "request.json", payload)
     try:
         with (request_dir / "events.jsonl").open("w") as journal:
-            async with client.stream("POST", GAIA_URL + "/api/chat", json=payload,
+            async with client.stream("POST", config.gaia_url + "/api/chat", json=payload,
                                      headers={"Accept": "application/x-ndjson"}) as response:
                 row["http_status"] = response.status_code
                 if response.status_code != 200:
@@ -141,13 +141,14 @@ async def _monitor_metrics(
     start: float,
     finished: asyncio.Event,
     samples: list[dict],
+    config: BenchmarkConfig,
 ) -> None:
     with (metrics_dir / "samples.jsonl").open("w") as stream:
         while not finished.is_set():
             sample = {"utc": datetime.now(timezone.utc).isoformat(),
                       "elapsed_seconds": time.perf_counter() - start}
             try:
-                response = await client.get(VLLM_URL + "/metrics", timeout=15)
+                response = await client.get(config.engine_url + "/metrics", timeout=15)
                 response.raise_for_status()
                 sample["metrics"] = parse_metrics(response.text)
                 samples.append(sample)
@@ -161,7 +162,8 @@ async def _monitor_metrics(
                 pass
 
 
-async def phase(output_dir: Path, workload) -> dict:
+async def phase(output_dir: Path, workload, config: BenchmarkConfig | None = None) -> dict:
+    config = config or BenchmarkConfig()
     output_dir.mkdir(parents=True, exist_ok=False)
     metrics_dir = output_dir / "metrics"
     metrics_dir.mkdir()
@@ -171,20 +173,20 @@ async def phase(output_dir: Path, workload) -> dict:
     # More sockets than the offered workload, including monitoring: no client admission queue.
     async with httpx.AsyncClient(timeout=timeout, trust_env=False,
                                  limits=httpx.Limits(max_connections=32)) as client:
-        response = await client.get(VLLM_URL + "/metrics", timeout=15)
+        response = await client.get(config.engine_url + "/metrics", timeout=15)
         response.raise_for_status()
         baseline = parse_metrics(response.text)
         (metrics_dir / "before.prom").write_text(response.text)
         if baseline.get("vllm:num_requests_running") or baseline.get("vllm:num_requests_waiting"):
             raise RuntimeError("Inference engine has active traffic; wait for the exclusive test slot")
-        response = await client.get(GAIA_URL + "/api/health", timeout=15)
+        response = await client.get(config.gaia_url + "/api/health", timeout=15)
         response.raise_for_status()
         started_at = datetime.now(timezone.utc).isoformat()
         start = time.perf_counter()
 
 
         monitor_task = asyncio.create_task(
-            _monitor_metrics(client, metrics_dir, start, finished, samples)
+            _monitor_metrics(client, metrics_dir, start, finished, samples, config)
         )
         failure, details, final = None, {}, {}
         try:
@@ -199,7 +201,7 @@ async def phase(output_dir: Path, workload) -> dict:
             # Individual request files/journals also retain partially completed groups.
             save(output_dir / "results.json", results)
             try:
-                response = await client.get(VLLM_URL + "/metrics", timeout=15)
+                response = await client.get(config.engine_url + "/metrics", timeout=15)
                 response.raise_for_status()
                 final = parse_metrics(response.text)
                 (metrics_dir / "after.prom").write_text(response.text)
@@ -266,7 +268,9 @@ async def burst(
     return {"release": "shared asyncio event", "jobs": len(jobs)}
 
 
-async def ladder(run_dir: Path, identity: str, trace_root: Path) -> dict | None:
+async def ladder(run_dir: Path, identity: str, trace_root: Path,
+                 config: BenchmarkConfig | None = None) -> dict | None:
+    config = config or BenchmarkConfig()
     directory = run_dir / CONCURRENCY
     directory.mkdir(parents=True, exist_ok=False)
     summaries = []
@@ -281,7 +285,7 @@ async def ladder(run_dir: Path, identity: str, trace_root: Path) -> dict | None:
 
         summary = None
         try:
-            summary = await phase(output_dir, workload)
+            summary = await phase(output_dir, workload, config)
         finally:
             source = output_dir / "summary.json"
             if summary is None and source.exists():
@@ -315,9 +319,10 @@ async def _seed_workload(
     client: httpx.AsyncClient,
     start: float,
     results: list[dict],
+    config: BenchmarkConfig,
 ) -> dict:
     row = await chat(client, directory, start, "seed", identity + "_growth", ordinary_prompt(3),
-                     trace_root=trace_root, results=results)
+                     trace_root=trace_root, results=results, config=config)
     if row["status"] != "success":
         raise RuntimeError("The initial Fungi query failed; inspect its saved result")
     seed.update(conversation_seed(row, directory))
@@ -325,14 +330,16 @@ async def _seed_workload(
     return {}
 
 
-async def seed_conversation(run_dir: Path, identity: str, trace_root: Path) -> dict:
+async def seed_conversation(run_dir: Path, identity: str, trace_root: Path,
+                            config: BenchmarkConfig | None = None) -> dict:
     """Start one real Fungi chat when growth is selected without the ladder."""
     directory = run_dir / CONVERSATION_SETUP
     seed = {}
 
-    workload = partial(_seed_workload, directory, identity, trace_root, seed)
+    config = config or BenchmarkConfig()
+    workload = partial(_seed_workload, directory, identity, trace_root, seed, config=config)
 
-    await phase(directory, workload)
+    await phase(directory, workload, config)
     return seed
 
 
@@ -348,10 +355,12 @@ def growth_prompt(identity: str, turn: int) -> str:
 class _ConversationGrowth:
     """Own the evolving context measurements for one retained conversation."""
 
-    def __init__(self, output_dir: Path, seed: dict, trace_root: Path) -> None:
+    def __init__(self, output_dir: Path, seed: dict, trace_root: Path,
+                 config: BenchmarkConfig | None = None) -> None:
         self.output_dir = output_dir
         self.seed = seed
         self.trace_root = trace_root
+        self.config = config or BenchmarkConfig()
         self.interaction = seed["interaction"]
         self.used_tokens = seed["used_tokens"]
 
@@ -364,7 +373,7 @@ class _ConversationGrowth:
             client, self.output_dir, start, f"turn_{self.interaction:03d}",
             self.seed["username"], prompt, self.seed["conversation_id"],
             trace_root=self.trace_root, classification=classification,
-            expected_interaction=self.interaction, results=results,
+            expected_interaction=self.interaction, results=results, config=self.config,
         )
         if row["status"] != "success":
             raise RuntimeError(
@@ -437,7 +446,9 @@ class _ConversationGrowth:
         }
 
 
-async def gaia_history(run_dir: Path, seed: dict, trace_root: Path) -> dict:
+async def gaia_history(run_dir: Path, seed: dict, trace_root: Path,
+                       config: BenchmarkConfig | None = None) -> dict:
     output_dir = run_dir / CONVERSATION
-    workload = _ConversationGrowth(output_dir, seed, trace_root)
-    return await phase(output_dir, workload.run)
+    config = config or BenchmarkConfig()
+    workload = _ConversationGrowth(output_dir, seed, trace_root, config)
+    return await phase(output_dir, workload.run, config)

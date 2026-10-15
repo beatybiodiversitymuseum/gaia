@@ -23,7 +23,8 @@ model-emitted call order before the next model request.
 Gaia exposes six core capabilities:
 
 - `retrieve_schema` returns deterministic schema metadata selected by exact
-  dataset or collection names.
+  dataset or collection names. An empty argument object selects all available
+  collections.
 - `search_darwin_core_terms` searches the installed standard snapshot by term
   text and standard metadata.
 - `get_darwin_core_terms` returns complete installed metadata for exact Darwin
@@ -106,11 +107,31 @@ containing the executed capability name, exact validated arguments, completion
 status, and already-projected result evidence in call order. Every call also
 contains a concise public purpose, authored when the call is requested, stating
 why it is needed and what evidence it should establish. The purpose is removed
-before domain validation and execution. Result arrays show at most ten items and
-report omissions. The verification trace never includes raw model reasoning,
-prompts, operational paths, backend configuration, credentials, or unprojected
-database fields. Live progress remains limited to user-facing activity
-descriptions.
+before domain validation and execution. Each new call also carries a short public
+interpretation of the user's request in terms of the selected scope, constraints,
+and operation. It is recorded with the call, not reconstructed from private
+model reasoning, and is likewise removed before domain execution. Users can
+compare this interpretation with the recorded arguments. Result arrays show at
+most ten items and report omissions. The verification trace never includes raw
+model reasoning, prompts, operational paths, backend configuration,
+credentials, or unprojected database fields. Live progress shows the public
+interpretation alongside each completed or failed activity when one was
+recorded; older calls without an interpretation keep their original activity
+description.
+
+### Replay a recorded call
+
+For completed read-only calls, the verification panel offers a terminal command
+that copies the call's capability and validated arguments. Run the pasted command
+from the Gaia repository with the same Python environment and PostgreSQL
+configuration used by the instance. The command calls the registered Gaia tool
+directly, without starting the model or web server, and prints its result as
+JSON.
+
+The pasted command contains a JSON document supplied on standard input to
+`.venv/bin/python -m src.gaia_agent.replay`. Replays query the currently loaded
+database. File generation is excluded because replaying an export would create
+a new workbook.
 
 ## Cancellation and failures
 

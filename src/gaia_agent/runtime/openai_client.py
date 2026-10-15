@@ -328,14 +328,25 @@ def _parse_tool_call(raw_call: object) -> ToolCall:
         raise OpenAIClientError(
             "tool call purpose must be a non-empty string of at most 300 characters"
         )
+    interpretation = arguments.get("interpretation")
+    if (
+        not isinstance(interpretation, str)
+        or not interpretation.strip()
+        or len(interpretation) > 300
+    ):
+        raise OpenAIClientError(
+            "tool call interpretation must be a non-empty string of at most 300 characters"
+        )
     executable_arguments = {
-        name: value for name, value in arguments.items() if name != "purpose"
+        name: value for name, value in arguments.items()
+        if name not in {"purpose", "interpretation"}
     }
     return ToolCall(
         id=raw_call.get("id"),
         name=function.get("name"),
         arguments=executable_arguments,
         purpose=purpose,
+        interpretation=interpretation,
         emitted_arguments=arguments,
     )
 
